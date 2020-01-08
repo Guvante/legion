@@ -16,7 +16,7 @@ use std::{collections::VecDeque, iter::FromIterator, marker::PhantomData, sync::
 /// access.
 pub trait WorldWritable {
     /// Destructs the writer and performs the write operations on the world.
-    fn write(self: Arc<Self>, world: &mut World);
+    fn write(self: Box<Self>, world: &mut World);
 
     /// Returns the list of `ComponentTypeId` which are written by this command buffer. This is leveraged
     /// to allow parralel command buffer flushing.
@@ -45,10 +45,8 @@ where
     T: TagSet + TagLayout + for<'a> Filter<ChunksetFilterData<'a>>,
     C: ComponentSource,
 {
-    fn write(self: Arc<Self>, world: &mut World) {
-        let consumed = Arc::try_unwrap(self).unwrap();
-
-        world.insert_buffered(&consumed.entities, consumed.tags, consumed.components);
+    fn write(self: Box<Self>, world: &mut World) {
+        world.insert_buffered(&self.entities, self.tags, self.components);
     }
 
     fn write_components(&self) -> Vec<ComponentTypeId> { self.write_components.clone() }
@@ -71,9 +69,8 @@ where
     T: TagSet + TagLayout + for<'a> Filter<ChunksetFilterData<'a>>,
     C: IntoComponentSource,
 {
-    fn write(self: Arc<Self>, world: &mut World) {
-        let consumed = Arc::try_unwrap(self).unwrap();
-        world.insert(consumed.tags, consumed.components);
+    fn write(self: Box<Self>, world: &mut World) {
+        world.insert(self.tags, self.components);
     }
 
     fn write_components(&self) -> Vec<ComponentTypeId> { self.write_components.clone() }
@@ -84,7 +81,7 @@ where
 #[derivative(Debug(bound = ""))]
 struct DeleteEntityCommand(Entity);
 impl WorldWritable for DeleteEntityCommand {
-    fn write(self: Arc<Self>, world: &mut World) { world.delete(self.0); }
+    fn write(self: Box<Self>, world: &mut World) { world.delete(self.0); }
 
     fn write_components(&self) -> Vec<ComponentTypeId> { Vec::with_capacity(0) }
     fn write_tags(&self) -> Vec<TagTypeId> { Vec::with_capacity(0) }
@@ -101,9 +98,8 @@ impl<T> WorldWritable for AddTagCommand<T>
 where
     T: Tag,
 {
-    fn write(self: Arc<Self>, world: &mut World) {
-        let consumed = Arc::try_unwrap(self).unwrap();
-        world.add_tag(consumed.entity, consumed.tag)
+    fn write(self: Box<Self>, world: &mut World) {
+        world.add_tag(self.entity, self.tag)
     }
 
     fn write_components(&self) -> Vec<ComponentTypeId> { Vec::with_capacity(0) }
@@ -120,7 +116,7 @@ impl<T> WorldWritable for RemoveTagCommand<T>
 where
     T: Tag,
 {
-    fn write(self: Arc<Self>, world: &mut World) { world.remove_tag::<T>(self.entity) }
+    fn write(self: Box<Self>, world: &mut World) { world.remove_tag::<T>(self.entity) }
 
     fn write_components(&self) -> Vec<ComponentTypeId> { Vec::with_capacity(0) }
     fn write_tags(&self) -> Vec<TagTypeId> { vec![TagTypeId::of::<T>()] }
@@ -138,10 +134,9 @@ impl<C> WorldWritable for AddComponentCommand<C>
 where
     C: Component,
 {
-    fn write(self: Arc<Self>, world: &mut World) {
-        let consumed = Arc::try_unwrap(self).unwrap();
+    fn write(self: Box<Self>, world: &mut World) {
         world
-            .add_component::<C>(consumed.entity, consumed.component)
+            .add_component::<C>(self.entity, self.component)
             .unwrap();
     }
 
@@ -159,7 +154,7 @@ impl<C> WorldWritable for RemoveComponentCommand<C>
 where
     C: Component,
 {
-    fn write(self: Arc<Self>, world: &mut World) { world.remove_component::<C>(self.entity) }
+    fn write(self: Box<Self>, world: &mut World) { world.remove_component::<C>(self.entity) }
 
     fn write_components(&self) -> Vec<ComponentTypeId> { vec![ComponentTypeId::of::<C>()] }
     fn write_tags(&self) -> Vec<TagTypeId> { Vec::with_capacity(0) }
@@ -167,9 +162,9 @@ where
 
 #[allow(clippy::enum_variant_names)]
 enum EntityCommand {
-    WriteWorld(Arc<dyn WorldWritable>),
-    ExecWorld(Arc<dyn Fn(&World)>),
-    ExecMutWorld(Arc<dyn Fn(&mut World)>),
+    WriteWorld(Box<dyn WorldWritable>),
+    ExecWorld(Box<dyn Fn(&World)>),
+    ExecMutWorld(Box<dyn Fn(&mut World)>),
 }
 
 /// A builder type which can be retrieved from the command buffer. This is the ideal use case for
@@ -250,7 +245,7 @@ where
         buffer
             .commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(InsertBufferedCommand {
+            .push_front(EntityCommand::WriteWorld(Box::new(InsertBufferedCommand {
                 write_components: Vec::default(),
                 write_tags: Vec::default(),
                 tags: self.tags.flatten(),
@@ -479,7 +474,7 @@ impl CommandBuffer {
     {
         self.commands
             .get_mut()
-            .push_front(EntityCommand::ExecMutWorld(Arc::new(f)));
+            .push_front(EntityCommand::ExecMutWorld(Box::new(f)));
     }
 
     /// Inserts an arbitrary implementor of the `WorldWritable` trait into the command queue.
@@ -491,7 +486,7 @@ impl CommandBuffer {
     {
         self.commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(writer)));
+            .push_front(EntityCommand::WriteWorld(Box::new(writer)));
     }
 
     /// Queues an *unbuffered* insertion into the world. This command follows the same syntax as
@@ -510,7 +505,7 @@ impl CommandBuffer {
     {
         self.commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(InsertCommand {
+            .push_front(EntityCommand::WriteWorld(Box::new(InsertCommand {
                 write_components: Vec::default(),
                 write_tags: Vec::default(),
                 tags,
@@ -537,7 +532,7 @@ impl CommandBuffer {
 
         self.commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(InsertBufferedCommand {
+            .push_front(EntityCommand::WriteWorld(Box::new(InsertBufferedCommand {
                 write_components: Vec::default(),
                 write_tags: Vec::default(),
                 tags,
@@ -552,7 +547,7 @@ impl CommandBuffer {
     pub fn delete(&self, entity: Entity) {
         self.commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(DeleteEntityCommand(
+            .push_front(EntityCommand::WriteWorld(Box::new(DeleteEntityCommand(
                 entity,
             ))));
     }
@@ -562,7 +557,7 @@ impl CommandBuffer {
     pub fn add_component<C: Component>(&self, entity: Entity, component: C) {
         self.commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(AddComponentCommand {
+            .push_front(EntityCommand::WriteWorld(Box::new(AddComponentCommand {
                 entity,
                 component,
             })));
@@ -573,7 +568,7 @@ impl CommandBuffer {
     pub fn remove_component<C: Component>(&self, entity: Entity) {
         self.commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(
+            .push_front(EntityCommand::WriteWorld(Box::new(
                 RemoveComponentCommand {
                     entity,
                     _marker: PhantomData::<C>::default(),
@@ -586,7 +581,7 @@ impl CommandBuffer {
     pub fn add_tag<T: Tag>(&self, entity: Entity, tag: T) {
         self.commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(AddTagCommand {
+            .push_front(EntityCommand::WriteWorld(Box::new(AddTagCommand {
                 entity,
                 tag,
             })));
@@ -597,7 +592,7 @@ impl CommandBuffer {
     pub fn remove_tag<T: Tag>(&self, entity: Entity) {
         self.commands
             .get_mut()
-            .push_front(EntityCommand::WriteWorld(Arc::new(RemoveTagCommand {
+            .push_front(EntityCommand::WriteWorld(Box::new(RemoveTagCommand {
                 entity,
                 _marker: PhantomData::<T>::default(),
             })));
