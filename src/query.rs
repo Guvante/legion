@@ -19,9 +19,11 @@ use crate::filter::TagFilter;
 #[cfg(feature = "par-iter")]
 use crate::iterator::{FissileEnumerate, FissileIterator};
 use crate::storage::ArchetypeData;
+use crate::storage::ChunkIndex;
 use crate::storage::Component;
 use crate::storage::ComponentStorage;
 use crate::storage::ComponentTypeId;
+use crate::storage::SetIndex;
 use crate::storage::Storage;
 use crate::storage::Tag;
 use crate::storage::TagTypeId;
@@ -51,7 +53,7 @@ pub trait View<'a>: Sized + Send + Sync + 'static {
     fn fetch(
         archetype: &'a ArchetypeData,
         chunk: &'a ComponentStorage,
-        chunk_index: usize,
+        chunk_index: ChunkIndex,
     ) -> Self::Iter;
 
     /// Validates that the view does not break any component borrowing rules.
@@ -126,7 +128,7 @@ impl<'a, T: Component> DefaultFilter for Read<T> {
 impl<'a, T: Component> View<'a> for Read<T> {
     type Iter = RefIter<'a, T, Iter<'a, T>>;
 
-    fn fetch(_: &'a ArchetypeData, chunk: &'a ComponentStorage, _: usize) -> Self::Iter {
+    fn fetch(_: &'a ArchetypeData, chunk: &'a ComponentStorage, _: ChunkIndex) -> Self::Iter {
         let (slice_borrow, slice) = unsafe {
             chunk
                 .components(ComponentTypeId::of::<T>())
@@ -178,7 +180,7 @@ impl<'a, T: Component> DefaultFilter for TryRead<T> {
 impl<'a, T: Component> View<'a> for TryRead<T> {
     type Iter = TryRefIter<'a, T, Iter<'a, T>>;
 
-    fn fetch(_: &'a ArchetypeData, chunk: &'a ComponentStorage, _: usize) -> Self::Iter {
+    fn fetch(_: &'a ArchetypeData, chunk: &'a ComponentStorage, _: ChunkIndex) -> Self::Iter {
         unsafe {
             chunk
                 .components(ComponentTypeId::of::<T>())
@@ -225,7 +227,7 @@ impl<'a, T: Component> View<'a> for Write<T> {
     type Iter = RefIterMut<'a, T, IterMut<'a, T>>;
 
     #[inline]
-    fn fetch(_: &'a ArchetypeData, chunk: &'a ComponentStorage, _: usize) -> Self::Iter {
+    fn fetch(_: &'a ArchetypeData, chunk: &'a ComponentStorage, _: ChunkIndex) -> Self::Iter {
         let (slice_borrow, slice) = unsafe {
             chunk
                 .components(ComponentTypeId::of::<T>())
@@ -280,7 +282,7 @@ impl<'a, T: Component> DefaultFilter for TryWrite<T> {
 impl<'a, T: Component> View<'a> for TryWrite<T> {
     type Iter = TryRefIterMut<'a, T, IterMut<'a, T>>;
 
-    fn fetch(_: &'a ArchetypeData, chunk: &'a ComponentStorage, _: usize) -> Self::Iter {
+    fn fetch(_: &'a ArchetypeData, chunk: &'a ComponentStorage, _: ChunkIndex) -> Self::Iter {
         unsafe {
             chunk
                 .components(ComponentTypeId::of::<T>())
@@ -335,7 +337,7 @@ impl<'a, T: Tag> View<'a> for Tagged<T> {
     fn fetch(
         archetype: &'a ArchetypeData,
         chunk: &'a ComponentStorage,
-        chunk_index: usize,
+        chunk_index: ChunkIndex,
     ) -> Self::Iter {
         let data = unsafe {
             archetype
@@ -348,7 +350,8 @@ impl<'a, T: Tag> View<'a> for Tagged<T> {
                     )
                 })
                 .data_slice::<T>()
-                .get_unchecked(chunk_index)
+                .get(chunk_index.id())
+                .unwrap()
         };
         std::iter::repeat(data).take(chunk.len())
     }
@@ -402,7 +405,7 @@ macro_rules! impl_view_tuple {
             fn fetch(
                 archetype: &'a ArchetypeData,
                 chunk: &'a ComponentStorage,
-                chunk_index: usize,
+                chunk_index: ChunkIndex,
             ) -> Self::Iter {
                 crate::zip::multizip(($( $ty::fetch(archetype.clone(), chunk.clone(), chunk_index), )*))
             }
@@ -454,21 +457,21 @@ impl_view_tuple!(A, B, C, D, E, F);
 pub struct Chunk<'a, V: for<'b> View<'b>> {
     archetype: &'a ArchetypeData,
     components: &'a ComponentStorage,
-    index: usize,
+    index: ChunkIndex,
     view: PhantomData<V>,
 }
 
 impl<'a, V: for<'b> View<'b>> Chunk<'a, V> {
-    pub fn new(archetype: &'a ArchetypeData, set: usize, index: usize) -> Self {
+    pub fn new(archetype: &'a ArchetypeData, set: SetIndex, index: ChunkIndex) -> Self {
         Self {
-            components: unsafe {
+            components:
                 archetype
-                    .chunksets()
-                    .get_unchecked(set)
-                    .get_unchecked(index)
-            },
+                    .get_chunkset(set)
+                    .unwrap()
+                    .get(index)
+                    .unwrap(),
             archetype,
-            index: set,
+            index,
             view: PhantomData,
         }
     }
@@ -500,7 +503,7 @@ impl<'a, V: for<'b> View<'b>> Chunk<'a, V> {
             .tags()
             .get(TagTypeId::of::<T>())
             .map(|tags| unsafe { tags.data_slice::<T>() })
-            .map(|slice| unsafe { slice.get_unchecked(self.index) })
+            .map(|slice| unsafe { slice.get_unchecked(self.index.id()) })
     }
 
     /// Get a slice of component data.
@@ -578,7 +581,7 @@ where
     chunk_filter: &'filter FChunk,
     archetypes: Enumerate<FArch::Iter>,
     set_frontier: Option<(&'data ArchetypeData, Take<Enumerate<FChunkset::Iter>>)>,
-    chunk_frontier: Option<(&'data ArchetypeData, usize, Take<Enumerate<FChunk::Iter>>)>,
+    chunk_frontier: Option<(&'data ArchetypeData, SetIndex, Take<Enumerate<FChunk::Iter>>)>,
 }
 
 impl<'data, 'filter, V, FArch, FChunkset, FChunk>
@@ -589,13 +592,13 @@ where
     FChunkset: Filter<ChunksetFilterData<'data>>,
     FChunk: Filter<ChunkFilterData<'data>>,
 {
-    fn next_set(&mut self) -> Option<(&'data ArchetypeData, usize)> {
+    fn next_set(&mut self) -> Option<(&'data ArchetypeData, SetIndex)> {
         loop {
             // if we are looping through an archetype, find the next set
             if let Some((ref arch, ref mut chunks)) = self.set_frontier {
                 for (set_index, filter_data) in chunks {
                     if self.chunkset_filter.is_match(&filter_data).is_pass() {
-                        return Some((arch, set_index));
+                        return Some((arch, SetIndex::new(set_index)));
                     }
                 }
             }
@@ -648,14 +651,14 @@ where
             if let Some((ref arch, set_index, ref mut set)) = self.chunk_frontier {
                 for (chunk_index, filter_data) in set {
                     if self.chunk_filter.is_match(&filter_data).is_pass() {
-                        return Some(Chunk::new(arch, set_index, chunk_index));
+                        return Some(Chunk::new(arch, set_index, ChunkIndex::new(chunk_index)));
                     }
                 }
             }
 
             // we have completed the set, find the next
             if let Some((ref arch, set_index)) = self.next_set() {
-                let chunks = unsafe { arch.chunksets().get_unchecked(set_index) }.occupied();
+                let chunks = arch.get_chunkset(set_index).unwrap().occupied();
                 self.chunk_frontier = Some((
                     arch,
                     set_index,
@@ -1366,13 +1369,13 @@ where
     set_frontier: Option<(
         &'data ArchetypeData,
         FissileEnumerate<FChunkset::Iter>,
-        usize,
+        SetIndex,
     )>,
     chunk_frontier: Option<(
         &'data ArchetypeData,
-        usize,
+        SetIndex,
         FissileEnumerate<FChunk::Iter>,
-        usize,
+        ChunkIndex,
     )>,
 }
 
@@ -1388,15 +1391,15 @@ where
     FChunkset::Iter: FissileIterator,
     FChunk::Iter: FissileIterator,
 {
-    fn next_set(&mut self) -> Option<(&'data ArchetypeData, usize)> {
+    fn next_set(&mut self) -> Option<(&'data ArchetypeData, SetIndex)> {
         loop {
             // if we are looping through an archetype, find the next set
             if let Some((ref arch, ref mut chunks, index_bound)) = self.set_frontier {
                 for (set_index, filter_data) in chunks {
-                    if set_index < index_bound
+                    if set_index < index_bound.id()
                         && self.chunkset_filter.is_match(&filter_data).is_pass()
                     {
-                        return Some((arch, set_index));
+                        return Some((arch, SetIndex::new(set_index)));
                     }
                 }
             }
@@ -1417,7 +1420,7 @@ where
                                 Some((
                                     arch,
                                     FissileEnumerate::new(self.chunkset_filter.collect(data)),
-                                    arch.len(),
+                                    SetIndex::new(arch.len()),
                                 ))
                             };
                             break;
@@ -1450,22 +1453,22 @@ where
             // if we are looping through a set, then yield the next chunk
             if let Some((ref arch, set_index, ref mut set, index_bound)) = self.chunk_frontier {
                 for (chunk_index, filter_data) in set {
-                    if chunk_index < index_bound
+                    if chunk_index < index_bound.id()
                         && self.chunk_filter.is_match(&filter_data).is_pass()
                     {
-                        return Some(Chunk::new(arch, set_index, chunk_index));
+                        return Some(Chunk::new(arch, set_index, ChunkIndex::new(chunk_index)));
                     }
                 }
             }
 
             // we have completed the set, find the next
             if let Some((ref arch, set_index)) = self.next_set() {
-                let chunks = unsafe { arch.chunksets().get_unchecked(set_index) }.occupied();
+                let chunks = arch.get_chunkset(set_index).unwrap().occupied();
                 self.chunk_frontier = Some((
                     arch,
                     set_index,
                     FissileEnumerate::new(self.chunk_filter.collect(ChunkFilterData { chunks })),
-                    chunks.len(),
+                    ChunkIndex::new(chunks.len()),
                 ))
             } else {
                 return None;

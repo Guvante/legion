@@ -1,8 +1,8 @@
 use crate::{
     entity::{Entity, EntityAllocator},
     storage::{
-        ArchetypeData, ArchetypeDescription, Chunkset, ComponentMeta, ComponentTypeId, TagMeta,
-        TagStorage, TagTypeId,
+        ArchetypeData, ArchetypeDescription, ArchetypeIndex, ChunkIndex, Chunkset, ComponentMeta, ComponentTypeId,
+        SetIndex, TagMeta, TagStorage, TagTypeId,
     },
     world::World,
 };
@@ -146,7 +146,7 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
                     })?
                     .expect("expected description");
                 let mut world = self.world.borrow_mut();
-                let archetype_data = &mut world.storage_mut().archetypes_mut()[archetype_idx];
+                let archetype_data = world.storage_mut().get_archetype_mut(archetype_idx).unwrap();
                 let chunkset_map = seq
                     .next_element_seed(TagsDeserializer {
                         user: self.user,
@@ -182,8 +182,7 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
                             let archetype_idx =
                                 archetype_idx.expect("expected archetype description before tags");
                             let mut world = self.world.borrow_mut();
-                            let archetype_data =
-                                &mut world.storage_mut().archetypes_mut()[archetype_idx];
+                            let archetype_data = world.storage_mut().get_archetype_mut(archetype_idx).unwrap();
                             chunkset_map = Some(map.next_value_seed(TagsDeserializer {
                                 user: self.user,
                                 archetype: archetype_data,
@@ -246,7 +245,7 @@ struct ArchetypeDescriptionDeserialize<'a, 'b, WD: WorldDeserializer> {
 impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
     for ArchetypeDescriptionDeserialize<'a, 'b, WD>
 {
-    type Value = usize;
+    type Value = ArchetypeIndex;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, <D as Deserializer<'de>>::Error>
     where
@@ -262,6 +261,7 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
             .archetypes()
             .iter()
             .position(|a| a.description() == &archetype_desc)
+            .map(|a| ArchetypeIndex::new(a))
             .unwrap_or_else(|| {
                 let (idx, _) = storage.alloc_archetype(archetype_desc);
                 idx
@@ -269,7 +269,7 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
     }
 }
 
-type ChunkSetMapping = HashMap<usize, usize>;
+type ChunkSetMapping = HashMap<usize, SetIndex>;
 
 struct TagsDeserializer<'a, 'b, WD: WorldDeserializer> {
     user: &'b WD,
@@ -335,7 +335,7 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de> for TagsDeserializ
                         }
                     }
                     if is_matching {
-                        matching_idx = Some(j);
+                        matching_idx = Some(SetIndex::new(j));
                         break;
                     }
                 }
@@ -438,7 +438,7 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
 struct ChunkSetDeserializer<'a, 'b, WD: WorldDeserializer> {
     user: &'b WD,
     world: &'a mut World,
-    archetype_idx: usize,
+    archetype_idx: ArchetypeIndex,
     chunkset_map: &'a ChunkSetMapping,
 }
 impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de> for ChunkSetDeserializer<'a, 'b, WD> {
@@ -483,8 +483,8 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> Visitor<'de> for ChunkSetDeserializer<'
 struct ChunkListDeserializer<'a, 'b, WD: WorldDeserializer> {
     user: &'b WD,
     world: &'a mut World,
-    archetype_idx: usize,
-    chunkset_idx: Option<usize>,
+    archetype_idx: ArchetypeIndex,
+    chunkset_idx: Option<SetIndex>,
 }
 impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
     for ChunkListDeserializer<'a, 'b, WD>
@@ -535,8 +535,8 @@ enum ChunkField {
 struct ChunkDeserializer<'a, 'b, WD: WorldDeserializer> {
     user: &'b WD,
     world: &'a mut World,
-    archetype_idx: usize,
-    chunkset_idx: usize,
+    archetype_idx: ArchetypeIndex,
+    chunkset_idx: SetIndex,
 }
 impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de> for ChunkDeserializer<'a, 'b, WD> {
     type Value = ();
@@ -612,11 +612,11 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> Visitor<'de> for ChunkDeserializer<'a, 
 struct EntitiesDeserializer<'a, 'b, WD: WorldDeserializer> {
     user: &'b WD,
     world: &'a mut World,
-    archetype_idx: usize,
-    chunkset_idx: usize,
+    archetype_idx: ArchetypeIndex,
+    chunkset_idx: SetIndex,
 }
 impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de> for EntitiesDeserializer<'a, 'b, WD> {
-    type Value = Vec<(usize, usize)>;
+    type Value = Vec<(ChunkIndex, usize)>;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, <D as Deserializer<'de>>::Error>
     where
@@ -628,19 +628,19 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de> for EntitiesDeseri
             &self.world.entity_allocator,
             &mut entities,
         )?;
-        let archetype = &mut self.world.storage_mut().archetypes_mut()[self.archetype_idx];
+        let archetype = self.world.storage_mut().get_archetype_mut(self.archetype_idx).unwrap();
         let mut chunk_ranges = Vec::new();
         let mut chunk_idx = archetype.get_free_chunk(self.chunkset_idx, entities.len());
         let mut entities_in_chunk = 0;
         for entity in entities {
             let chunk = {
-                let chunkset = &mut archetype.chunksets_mut()[self.chunkset_idx];
-                let chunk = &mut chunkset[chunk_idx];
+                let chunkset = archetype.get_chunkset_mut(self.chunkset_idx).unwrap();
+                let chunk = chunkset.get_mut(chunk_idx).unwrap();
                 if chunk.is_full() {
                     chunk_ranges.push((chunk_idx, entities_in_chunk));
                     chunk_idx = archetype.get_free_chunk(self.chunkset_idx, 1);
-                    let chunkset = &mut archetype.chunksets_mut()[self.chunkset_idx];
-                    &mut chunkset[chunk_idx]
+                    let chunkset = archetype.get_chunkset_mut(self.chunkset_idx).unwrap();
+                    chunkset.get_mut(chunk_idx).unwrap()
                 } else {
                     chunk
                 }
@@ -657,9 +657,9 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de> for EntitiesDeseri
 struct ComponentsDeserializer<'a, 'b, WD: WorldDeserializer> {
     user: &'b WD,
     world: &'a mut World,
-    archetype_idx: usize,
-    chunkset_idx: usize,
-    chunk_ranges: &'a Vec<(usize, usize)>,
+    archetype_idx: ArchetypeIndex,
+    chunkset_idx: SetIndex,
+    chunk_ranges: &'a Vec<(ChunkIndex, usize)>,
 }
 impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
     for ComponentsDeserializer<'a, 'b, WD>
@@ -684,11 +684,11 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> Visitor<'de> for ComponentsDeserializer
     where
         A: de::SeqAccess<'de>,
     {
-        let archetype = &mut self.world.storage_mut().archetypes_mut()[self.archetype_idx];
+        let archetype = self.world.storage_mut().get_archetype_mut(self.archetype_idx).unwrap();
         for idx in 0..archetype.description().components().len() {
             let desc = archetype.description();
             let (comp_type, comp_meta) = desc.components()[idx];
-            let mut chunkset = &mut archetype.chunksets_mut()[self.chunkset_idx];
+            let mut chunkset = archetype.get_chunkset_mut(self.chunkset_idx).unwrap();
             if seq
                 .next_element_seed(ComponentDataDeserializer {
                     user: self.user,
@@ -711,7 +711,7 @@ struct ComponentDataDeserializer<'a, 'b, WD: WorldDeserializer> {
     comp_type: &'a ComponentTypeId,
     comp_meta: &'a ComponentMeta,
     chunkset: &'a mut Chunkset,
-    chunk_ranges: &'a Vec<(usize, usize)>,
+    chunk_ranges: &'a Vec<(ChunkIndex, usize)>,
 }
 impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
     for ComponentDataDeserializer<'a, 'b, WD>
@@ -730,7 +730,7 @@ impl<'de, 'a, 'b, WD: WorldDeserializer> DeserializeSeed<'de>
             &mut || -> Option<(NonNull<u8>, usize)> {
                 self.chunk_ranges.get(range_idx).map(|chunk_range| {
                     range_idx += 1;
-                    let chunk = &mut self.chunkset[chunk_range.0];
+                    let chunk = self.chunkset.get_mut(chunk_range.0).unwrap();
                     unsafe {
                         let comp_storage = (&mut *chunk.writer().get().1.get())
                             .get_mut(*self.comp_type)

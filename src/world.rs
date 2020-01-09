@@ -11,13 +11,17 @@ use crate::filter::EntityFilter;
 use crate::filter::Filter;
 use crate::iterator::SliceVecIter;
 use crate::resource::Resources;
+use crate::storage::ArchetypeIndex;
 use crate::storage::ArchetypeData;
 use crate::storage::ArchetypeDescription;
+use crate::storage::ChunkIndex;
 use crate::storage::Component;
+use crate::storage::ComponentIndex;
 use crate::storage::ComponentMeta;
 use crate::storage::ComponentStorage;
 use crate::storage::ComponentTypeId;
 use crate::storage::Storage;
+use crate::storage::SetIndex;
 use crate::storage::Tag;
 use crate::storage::TagMeta;
 use crate::storage::TagTypeId;
@@ -221,16 +225,16 @@ impl World {
             // get chunk component storage
             let archetype = unsafe {
                 (&mut *self.storage.get())
-                    .archetypes_mut()
-                    .get_unchecked_mut(archetype_index)
+                    .get_archetype_mut(archetype_index)
+                    .unwrap()
             };
             let chunk_index = archetype.get_free_chunk(chunk_set_index, 1);
-            let chunk = unsafe {
+            let chunk =
                 archetype
-                    .chunksets_mut()
-                    .get_unchecked_mut(chunk_set_index)
-                    .get_unchecked_mut(chunk_index)
-            };
+                    .get_chunkset_mut(chunk_set_index)
+                    .unwrap()
+                    .get_mut(chunk_index)
+                    .unwrap();
 
             // insert as many components as we can into the chunk
             let allocated =
@@ -241,7 +245,7 @@ impl World {
             let added = chunk.entities().iter().enumerate().skip(start);
             for (i, e) in added {
                 let location =
-                    EntityLocation::new(archetype_index, chunk_set_index, chunk_index, i);
+                    EntityLocation::new(archetype_index, chunk_set_index, chunk_index, ComponentIndex::new(i));
                 self.entity_allocator.set_location(e.index(), location);
             }
         }
@@ -270,15 +274,15 @@ impl World {
             // get chunk component storage
             let archetype = unsafe {
                 (&mut *self.storage.get())
-                    .archetypes_mut()
-                    .get_unchecked_mut(archetype_index)
+                    .get_archetype_mut(archetype_index)
+                    .unwrap()
             };
             let chunk_index = archetype.get_free_chunk(chunk_set_index, 1);
             let chunk = unsafe {
                 archetype
-                    .chunksets_mut()
-                    .get_unchecked_mut(chunk_set_index)
-                    .get_unchecked_mut(chunk_index)
+                    .get_chunkset_mut(chunk_set_index)
+                    .unwrap()
+                    .get_unchecked_mut(chunk_index.0)
             };
 
             // insert as many components as we can into the chunk
@@ -289,7 +293,7 @@ impl World {
             let added = chunk.entities().iter().enumerate().skip(start);
             for (i, e) in added {
                 let location =
-                    EntityLocation::new(archetype_index, chunk_set_index, chunk_index, i);
+                    EntityLocation::new(archetype_index, chunk_set_index, chunk_index, ComponentIndex::new(i));
                 self.entity_allocator.set_location(e.index(), location);
             }
         }
@@ -307,11 +311,9 @@ impl World {
             // find entity's chunk
             let chunk = self
                 .storage_mut()
-                .archetypes_mut()
-                .get_mut(location.archetype())
+                .get_archetype_mut(location.archetype())
                 .unwrap()
-                .chunksets_mut()
-                .get_mut(location.set())
+                .get_chunkset_mut(location.set())
                 .unwrap()
                 .get_mut(location.chunk())
                 .unwrap();
@@ -338,13 +340,12 @@ impl World {
         remove_components: &[ComponentTypeId],
         add_tags: &[(TagTypeId, TagMeta, NonNull<u8>)],
         remove_tags: &[TagTypeId],
-    ) -> (usize, usize) {
+    ) -> (ArchetypeIndex, SetIndex) {
         let archetype = {
             let result = {
                 let source_archetype = self
                     .storage()
-                    .archetypes()
-                    .get(source_location.archetype())
+                    .get_archetype(source_location.archetype())
                     .unwrap();
 
                 // find target chunk
@@ -392,8 +393,7 @@ impl World {
         // slow path: create new chunk
         let source_archetype = self
             .storage()
-            .archetypes()
-            .get(source_location.archetype())
+            .get_archetype(source_location.archetype())
             .unwrap();
         let mut tags = source_archetype.tags().tag_set(source_location.set());
         for type_id in remove_tags.iter() {
@@ -437,27 +437,24 @@ impl World {
 
         // fetch entity's chunk
         let current_chunk = unsafe { &mut *self.storage.get() }
-            .archetypes_mut()
-            .get_mut(location.archetype())
+            .get_archetype_mut(location.archetype())
             .unwrap()
-            .chunksets_mut()
-            .get_mut(location.set())
+            .get_chunkset_mut(location.set())
             .unwrap()
             .get_mut(location.chunk())
             .unwrap();
 
         // fetch target chunk
         let archetype = unsafe { &mut *self.storage.get() }
-            .archetypes_mut()
-            .get_mut(target_arch_index)
+            .get_archetype_mut(target_arch_index)
             .unwrap();
         let target_chunk_index = archetype.get_free_chunk(target_chunkset_index, 1);
-        let target_chunk = unsafe {
+        let target_chunk =
             archetype
-                .chunksets_mut()
-                .get_unchecked_mut(target_chunkset_index)
-                .get_unchecked_mut(target_chunk_index)
-        };
+                .get_chunkset_mut(target_chunkset_index)
+                .unwrap()
+                .get_mut(target_chunk_index)
+                .unwrap();
 
         // move existing data over into new chunk
         if let Some(swapped) = current_chunk.move_entity(target_chunk, location.component()) {
@@ -473,7 +470,7 @@ impl World {
                 target_arch_index,
                 target_chunkset_index,
                 target_chunk_index,
-                target_chunk.len() - 1,
+                ComponentIndex::new(target_chunk.len() - 1),
             ),
         );
 
@@ -628,10 +625,9 @@ impl World {
         }
 
         let location = self.entity_allocator.get_location(entity.index())?;
-        let archetype = self.storage().archetypes().get(location.archetype())?;
+        let archetype = self.storage().get_archetype(location.archetype())?;
         let chunk = archetype
-            .chunksets()
-            .get(location.set())?
+            .get_chunkset(location.set())?
             .get(location.chunk())?;
         let (slice_borrow, slice) = unsafe {
             chunk
@@ -639,18 +635,17 @@ impl World {
                 .data_slice::<T>()
                 .deconstruct()
         };
-        let component = slice.get(location.component())?;
+        let component = slice.get(location.component().id())?;
 
         Some(Ref::new(slice_borrow, component))
     }
 
     fn get_component_storage(&self, entity: Entity) -> Option<&ComponentStorage> {
         let location = self.entity_allocator.get_location(entity.index())?;
-        let archetype = self.storage().archetypes().get(location.archetype())?;
+        let archetype = self.storage().get_archetype(location.archetype())?;
         Some(
             archetype
-                .chunksets()
-                .get(location.set())?
+                .get_chunkset(location.set())?
                 .get(location.chunk())?,
         )
     }
@@ -699,16 +694,15 @@ impl World {
         }
 
         let location = self.entity_allocator.get_location(entity.index())?;
-        let archetype = self.storage().archetypes().get(location.archetype())?;
+        let archetype = self.storage().get_archetype(location.archetype())?;
         let chunk = archetype
-            .chunksets()
-            .get(location.set())?
+            .get_chunkset(location.set())?
             .get(location.chunk())?;
         let (slice_borrow, slice) = chunk
             .components(ComponentTypeId::of::<T>())?
             .data_slice_mut::<T>()
             .deconstruct();
-        let component = slice.get_mut(location.component())?;
+        let component = slice.get_mut(location.component().id())?;
 
         Some(RefMut::new(slice_borrow, component))
     }
@@ -737,10 +731,10 @@ impl World {
         }
 
         let location = self.entity_allocator.get_location(entity.index())?;
-        let archetype = self.storage().archetypes().get(location.archetype())?;
+        let archetype = self.storage().get_archetype(location.archetype())?;
         let tags = archetype.tags().get(TagTypeId::of::<T>())?;
 
-        unsafe { tags.data_slice::<T>().get(location.set()) }
+        unsafe { tags.data_slice::<T>().get(location.set().id()) }
     }
 
     /// Determines if the given `Entity` is alive within this `World`.
@@ -819,7 +813,7 @@ impl World {
 
             // update entity locations
             let archetype = &unsafe { &*self.storage.get() }.archetypes()[target_archetype];
-            for (entity, location) in archetype.enumerate_entities(target_archetype) {
+            for (entity, location) in archetype.enumerate_entities(ArchetypeIndex::new(target_archetype)) {
                 self.entity_allocator.set_location(entity.index(), location);
             }
         }
@@ -828,7 +822,7 @@ impl World {
         self.resources.merge(world.resources);
     }
 
-    fn find_archetype<T, C>(&self, tags: &mut T, components: &mut C) -> Option<usize>
+    fn find_archetype<T, C>(&self, tags: &mut T, components: &mut C) -> Option<ArchetypeIndex>
     where
         T: for<'a> Filter<ArchetypeFilterData<'a>>,
         C: for<'a> Filter<ArchetypeFilterData<'a>>,
@@ -845,11 +839,11 @@ impl World {
             .enumerate()
             .take(self.storage().archetypes().len())
             .filter(|(_, (a, b))| *a && *b)
-            .map(|(i, _)| i)
+            .map(|(i, _)| ArchetypeIndex::new(i))
             .next()
     }
 
-    fn create_archetype<T, C>(&mut self, tags: &T, components: &C) -> usize
+    fn create_archetype<T, C>(&mut self, tags: &T, components: &C) -> ArchetypeIndex
     where
         T: TagLayout,
         C: ComponentLayout,
@@ -862,7 +856,7 @@ impl World {
         index
     }
 
-    fn find_or_create_archetype<T, C>(&mut self, tags: &mut T, components: &mut C) -> usize
+    fn find_or_create_archetype<T, C>(&mut self, tags: &mut T, components: &mut C) -> ArchetypeIndex
     where
         T: TagLayout,
         C: ComponentLayout,
@@ -874,12 +868,12 @@ impl World {
         }
     }
 
-    fn find_chunk_set<T>(&self, archetype: usize, tags: &mut T) -> Option<usize>
+    fn find_chunk_set<T>(&self, archetype: ArchetypeIndex, tags: &mut T) -> Option<SetIndex>
     where
         T: for<'a> Filter<ChunksetFilterData<'a>>,
     {
         // fetch the archetype, we can already assume that the archetype index is valid
-        let archetype_data = unsafe { self.storage().archetypes().get_unchecked(archetype) };
+        let archetype_data = self.storage().get_archetype(archetype).unwrap();
 
         // find a chunk with the correct tags
         let chunk_filter_data = ChunksetFilterData {
@@ -887,25 +881,24 @@ impl World {
         };
 
         if let Some(i) = tags.matches(chunk_filter_data).matching_indices().next() {
-            return Some(i);
+            return Some(SetIndex::new(i));
         }
 
         None
     }
 
-    fn create_chunk_set<T>(&mut self, archetype: usize, tags: &T) -> usize
+    fn create_chunk_set<T>(&mut self, archetype: ArchetypeIndex, tags: &T) -> SetIndex
     where
         T: TagSet,
     {
-        let archetype_data = unsafe {
+        let archetype_data =
             self.storage_mut()
-                .archetypes_mut()
-                .get_unchecked_mut(archetype)
-        };
+                .get_archetype_mut(archetype)
+                .unwrap();
         archetype_data.alloc_chunk_set(|chunk_tags| tags.write_tags(chunk_tags))
     }
 
-    fn find_or_create_chunk<T>(&mut self, archetype: usize, tags: &mut T) -> usize
+    fn find_or_create_chunk<T>(&mut self, archetype: ArchetypeIndex, tags: &mut T) -> SetIndex
     where
         T: TagSet + for<'a> Filter<ChunksetFilterData<'a>>,
     {
@@ -1358,8 +1351,8 @@ impl<'a, 'b> Filter<ArchetypeFilterData<'b>> for DynamicComponentLayout<'a> {
 
 struct DynamicTagLayout<'a> {
     storage: &'a Storage,
-    archetype: usize,
-    chunk: usize,
+    archetype: ArchetypeIndex,
+    chunk: ChunkIndex,
     existing: &'a [(TagTypeId, TagMeta)],
     add: &'a [(TagTypeId, TagMeta, NonNull<u8>)],
     remove: &'a [TagTypeId],
@@ -1431,14 +1424,13 @@ impl<'a, 'b> Filter<ChunksetFilterData<'b>> for DynamicTagLayout<'a> {
                 // find the value of the tag in the source chunk
                 let (slice_ptr, element_size, _) = self
                     .storage
-                    .archetypes()
-                    .get(self.archetype)
+                    .get_archetype(self.archetype)
                     .unwrap()
                     .tags()
                     .get(*type_id)
                     .unwrap()
                     .data_raw();
-                let current = slice_ptr.as_ptr().add(self.chunk * element_size);
+                let current = slice_ptr.as_ptr().add(self.chunk.0 * element_size);
 
                 // find the value of the tag in the candidate chunk
                 let (slice_ptr, element_size, _) = arch.tags().get(*type_id).unwrap().data_raw();

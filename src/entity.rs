@@ -1,4 +1,5 @@
 use parking_lot::{Mutex, RwLock};
+use crate::storage::{ArchetypeIndex, SetIndex, ChunkIndex, ComponentIndex};
 use std::fmt::Display;
 use std::num::Wrapping;
 use std::sync::Arc;
@@ -29,18 +30,18 @@ impl Display for Entity {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct EntityLocation {
-    archetype_index: usize,
-    set_index: usize,
-    chunk_index: usize,
-    component_index: usize,
+    archetype_index: ArchetypeIndex,
+    set_index: SetIndex,
+    chunk_index: ChunkIndex,
+    component_index: ComponentIndex,
 }
 
 impl EntityLocation {
     pub(crate) fn new(
-        archetype_index: usize,
-        set_index: usize,
-        chunk_index: usize,
-        component_index: usize,
+        archetype_index: ArchetypeIndex,
+        set_index: SetIndex,
+        chunk_index: ChunkIndex,
+        component_index: ComponentIndex,
     ) -> Self {
         EntityLocation {
             archetype_index,
@@ -50,13 +51,13 @@ impl EntityLocation {
         }
     }
 
-    pub(crate) fn archetype(&self) -> usize { self.archetype_index }
+    pub(crate) fn archetype(&self) -> ArchetypeIndex { self.archetype_index }
 
-    pub(crate) fn set(&self) -> usize { self.set_index }
+    pub(crate) fn set(&self) -> SetIndex { self.set_index }
 
-    pub(crate) fn chunk(&self) -> usize { self.chunk_index }
+    pub(crate) fn chunk(&self) -> ChunkIndex { self.chunk_index }
 
-    pub(crate) fn component(&self) -> usize { self.component_index }
+    pub(crate) fn component(&self) -> ComponentIndex { self.component_index }
 }
 
 #[derive(Debug)]
@@ -104,7 +105,7 @@ impl EntityBlock {
             len,
             versions: Vec::with_capacity(len),
             free: Vec::new(),
-            locations: std::iter::repeat(EntityLocation::new(0, 0, 0, 0))
+            locations: std::iter::repeat(EntityLocation::new(ArchetypeIndex::new(0), SetIndex::new(0), ChunkIndex::new(0), ComponentIndex::new(0)))
                 .take(len)
                 .collect(),
         }

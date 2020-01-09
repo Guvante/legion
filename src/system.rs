@@ -654,7 +654,7 @@ impl SubWorld {
             if let Some(archetypes) = self.archetypes {
                 if let Some(location) = (*self.world).entity_allocator.get_location(entity.index())
                 {
-                    return (*archetypes).contains(location.archetype());
+                    return (*archetypes).contains(location.archetype().id());
                 }
             }
         }
