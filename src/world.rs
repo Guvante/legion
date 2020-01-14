@@ -205,6 +205,10 @@ impl World {
         T: TagSet + TagLayout + for<'a> Filter<ChunksetFilterData<'a>>,
         C: ComponentSource,
     {
+        if !components.validate() {
+            panic!("invalid insert set, please ensure you aren't inserting duplicate component types");
+        }
+
         let span = span!(Level::TRACE, "Inserting entities", world = self.id().0);
         let _guard = span.enter();
 
@@ -926,6 +930,9 @@ pub trait ComponentLayout: Sized {
     /// A filter type which filters archetypes to an exact match with this layout.
     type Filter: for<'a> Filter<ArchetypeFilterData<'a>>;
 
+    /// Does runtime validation that this ComponentLayout is sound (no duplicate types)
+    fn validate(&self) -> bool;
+
     /// Gets the archetype filter for this layout.
     fn get_filter(&mut self) -> &mut Self::Filter;
 
@@ -1040,6 +1047,7 @@ mod tuple_impls {
     use crate::storage::ComponentTypeId;
     use crate::storage::Tag;
     use crate::zip::Zip;
+    use std::any::TypeId;
     use std::iter::Repeat;
     use std::iter::Take;
     use std::slice::Iter;
@@ -1056,6 +1064,19 @@ mod tuple_impls {
                 $( $ty: Component ),*
             {
                 type Filter = ComponentTupleFilter<($( $ty, )*)>;
+
+                fn validate(&self) -> bool {
+                    let types : &[TypeId] = &[$( TypeId::of::<$ty>() ),*];
+                    for i in 0..types.len() {
+                        for j in (i + 1)..types.len() {
+                            if unsafe { types.get_unchecked(i) == types.get_unchecked(j) } {
+                                return false;
+                            }
+                        }
+                    }
+
+                    true
+                }
 
                 fn get_filter(&mut self) -> &mut Self::Filter {
                     &mut self.filter
@@ -1313,6 +1334,17 @@ struct DynamicComponentLayout<'a> {
 
 impl<'a> ComponentLayout for DynamicComponentLayout<'a> {
     type Filter = Self;
+
+    fn validate(&self) -> bool {
+        for (comp_type, _) in self.existing.iter() {
+            for (add_type, _) in self.add.iter() {
+                if comp_type == add_type {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 
     fn get_filter(&mut self) -> &mut Self::Filter { self }
 
@@ -1878,5 +1910,13 @@ mod tests {
 
         assert_eq!(*b.get_component::<Pos>(entity_b).unwrap(), Pos(7., 8., 9.));
         assert_eq!(*b.get_component::<Pos>(entity_a).unwrap(), Pos(1., 2., 3.));
+    }
+
+    #[test]
+    #[should_panic]
+    fn insert_duplicate()
+    {
+        let mut world = create();
+        world.insert((5u32,), vec![(3u32,2u32)]);
     }
 }
