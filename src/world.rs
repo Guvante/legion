@@ -801,7 +801,7 @@ impl World {
                     component_types: self.storage().component_types(),
                     tag_types: self.storage().tag_types(),
                 };
-                let matches = desc.matches(archetype_data).matching_indices().next();
+                let matches = desc.matches(&archetype_data).matching_indices().next();
                 if let Some(arch_index) = matches {
                     // similar archetype already exists, merge
                     self.storage_mut()
@@ -840,8 +840,8 @@ impl World {
         };
 
         // zip the two filters together - find the first index that matches both
-        tags.matches(archetype_data)
-            .zip(components.matches(archetype_data))
+        tags.matches(&archetype_data)
+            .zip(components.matches(&archetype_data))
             .enumerate()
             .take(self.storage().archetypes().len())
             .filter(|(_, (a, b))| *a && *b)
@@ -886,7 +886,7 @@ impl World {
             archetype_data: archetype_data.deref(),
         };
 
-        if let Some(i) = tags.matches(chunk_filter_data).matching_indices().next() {
+        if let Some(i) = tags.matches(&chunk_filter_data).matching_indices().next() {
             return Some(i);
         }
 
@@ -1155,7 +1155,7 @@ mod tuple_impls {
             {
                 type Iter = SliceVecIter<'a, ComponentTypeId>;
 
-                fn collect(&self, source: ArchetypeFilterData<'a>) -> Self::Iter {
+                fn collect(&self, source: &ArchetypeFilterData<'a>) -> Self::Iter {
                     source.component_types.iter()
                 }
 
@@ -1219,7 +1219,7 @@ mod tuple_impls {
             {
                 type Iter = SliceVecIter<'a, TagTypeId>;
 
-                fn collect(&self, source: ArchetypeFilterData<'a>) -> Self::Iter {
+                fn collect(&self, source: &ArchetypeFilterData<'a>) -> Self::Iter {
                     source.tag_types.iter()
                 }
 
@@ -1236,7 +1236,7 @@ mod tuple_impls {
             {
                 type Iter = Zip<($( Iter<'a, $ty>, )*)>;
 
-                fn collect(&self, source: ChunksetFilterData<'a>) -> Self::Iter {
+                fn collect(&self, source: &ChunksetFilterData<'a>) -> Self::Iter {
                     let iters = (
                         $(
                             unsafe {
@@ -1265,7 +1265,7 @@ mod tuple_impls {
             impl<'a> Filter<ChunksetFilterData<'a>> for () {
                 type Iter = Take<Repeat<()>>;
 
-                fn collect(&self, source: ChunksetFilterData<'a>) -> Self::Iter {
+                fn collect(&self, source: &ChunksetFilterData<'a>) -> Self::Iter {
                     std::iter::repeat(()).take(source.archetype_data.len())
                 }
 
@@ -1338,7 +1338,7 @@ impl<'a> ComponentLayout for DynamicComponentLayout<'a> {
 impl<'a, 'b> Filter<ArchetypeFilterData<'b>> for DynamicComponentLayout<'a> {
     type Iter = SliceVecIter<'b, ComponentTypeId>;
 
-    fn collect(&self, source: ArchetypeFilterData<'b>) -> Self::Iter {
+    fn collect(&self, source: &ArchetypeFilterData<'b>) -> Self::Iter {
         source.component_types.iter()
     }
 
@@ -1396,7 +1396,7 @@ impl<'a> TagLayout for DynamicTagLayout<'a> {
 impl<'a, 'b> Filter<ArchetypeFilterData<'b>> for DynamicTagLayout<'a> {
     type Iter = SliceVecIter<'b, TagTypeId>;
 
-    fn collect(&self, source: ArchetypeFilterData<'b>) -> Self::Iter { source.tag_types.iter() }
+    fn collect(&self, source: &ArchetypeFilterData<'b>) -> Self::Iter { source.tag_types.iter() }
 
     fn is_match(&self, item: &<Self::Iter as Iterator>::Item) -> Option<bool> {
         Some(
@@ -1415,7 +1415,7 @@ impl<'a, 'b> Filter<ArchetypeFilterData<'b>> for DynamicTagLayout<'a> {
 impl<'a, 'b> Filter<ChunksetFilterData<'b>> for DynamicTagLayout<'a> {
     type Iter = Take<Enumerate<Repeat<&'b ArchetypeData>>>;
 
-    fn collect(&self, source: ChunksetFilterData<'b>) -> Self::Iter {
+    fn collect(&self, source: &ChunksetFilterData<'b>) -> Self::Iter {
         std::iter::repeat(source.archetype_data)
             .enumerate()
             .take(source.archetype_data.len())

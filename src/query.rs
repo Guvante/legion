@@ -616,7 +616,7 @@ where
                                 Some((
                                     chunks,
                                     self.chunkset_filter
-                                        .collect(data)
+                                        .collect(&data)
                                         .enumerate()
                                         .take(chunks.len()),
                                 ))
@@ -660,7 +660,7 @@ where
                     arch,
                     set_index,
                     self.chunk_filter
-                        .collect(ChunkFilterData { chunks })
+                        .collect(&ChunkFilterData { chunks })
                         .enumerate()
                         .take(chunks.len()),
                 ))
@@ -902,7 +902,7 @@ where
         let (arch_filter, chunkset_filter, chunk_filter) = self.filter.filters();
         let storage = world.storage();
         let archetypes = arch_filter
-            .collect(ArchetypeFilterData {
+            .collect(&ArchetypeFilterData {
                 component_types: storage.component_types(),
                 tag_types: storage.tag_types(),
             })
@@ -1142,7 +1142,7 @@ where
     {
         let (arch_filter, chunkset_filter, chunk_filter) = self.filter.filters();
         let storage = world.storage();
-        let archetypes = FissileEnumerate::new(arch_filter.collect(ArchetypeFilterData {
+        let archetypes = FissileEnumerate::new(arch_filter.collect(&ArchetypeFilterData {
             component_types: storage.component_types(),
             tag_types: storage.tag_types(),
         }));
@@ -1416,7 +1416,7 @@ where
 
                                 Some((
                                     arch,
-                                    FissileEnumerate::new(self.chunkset_filter.collect(data)),
+                                    FissileEnumerate::new(self.chunkset_filter.collect(&data)),
                                     arch.len(),
                                 ))
                             };
@@ -1464,7 +1464,7 @@ where
                 self.chunk_frontier = Some((
                     arch,
                     set_index,
-                    FissileEnumerate::new(self.chunk_filter.collect(ChunkFilterData { chunks })),
+                    FissileEnumerate::new(self.chunk_filter.collect(&ChunkFilterData { chunks })),
                     chunks.len(),
                 ))
             } else {

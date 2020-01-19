@@ -382,7 +382,7 @@ impl ArchetypeDescription {
 impl<'a> Filter<ArchetypeFilterData<'a>> for ArchetypeDescription {
     type Iter = FissileZip<SliceVecIter<'a, TagTypeId>, SliceVecIter<'a, ComponentTypeId>>;
 
-    fn collect(&self, source: ArchetypeFilterData<'a>) -> Self::Iter {
+    fn collect(&self, source: &ArchetypeFilterData<'a>) -> Self::Iter {
         FissileZip::new(source.tag_types.iter(), source.component_types.iter())
     }
 

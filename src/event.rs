@@ -31,7 +31,7 @@ pub(crate) struct EventFilterWrapper<T: EntityFilter + Sync + 'static>(pub T);
 impl<T: EntityFilter + Sync + 'static> EventFilter for EventFilterWrapper<T> {
     fn matches_archetype(&self, data: ArchetypeFilterData, index: usize) -> bool {
         let (filter, _, _) = self.0.filters();
-        if let Some(element) = filter.collect(data).nth(index) {
+        if let Some(element) = filter.collect(&data).nth(index) {
             return filter.is_match(&element).is_pass();
         }
 
@@ -40,7 +40,7 @@ impl<T: EntityFilter + Sync + 'static> EventFilter for EventFilterWrapper<T> {
 
     fn matches_chunkset(&self, data: ChunksetFilterData, index: usize) -> bool {
         let (_, filter, _) = self.0.filters();
-        if let Some(element) = filter.collect(data).nth(index) {
+        if let Some(element) = filter.collect(&data).nth(index) {
             return filter.is_match(&element).is_pass();
         }
 
@@ -49,7 +49,7 @@ impl<T: EntityFilter + Sync + 'static> EventFilter for EventFilterWrapper<T> {
 
     fn matches_chunk(&self, data: ChunkFilterData, index: usize) -> bool {
         let (_, _, filter) = self.0.filters();
-        if let Some(element) = filter.collect(data).nth(index) {
+        if let Some(element) = filter.collect(&data).nth(index) {
             return filter.is_match(&element).is_pass();
         }
 
